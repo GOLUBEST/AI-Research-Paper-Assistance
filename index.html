@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ResearchHub - AI Research Assistance Platform</title>
+    <meta name="description" content="A research assistance platform for discovering papers, checking plagiarism, and generating summaries.">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+    <div id="landing-screen" class="landing-screen">
+        <div class="landing-content">
+            <div class="landing-logo">Research<span>Hub</span></div>
+            <h1>AI Based Research<br>Assistance Platform</h1>
+            <p class="landing-desc">Search research papers, check plagiarism, and generate summaries - all in one place.</p>
+            <div class="landing-cards">
+                <div class="l-card">
+                    <div class="l-card-icon">🔍</div>
+                    <h3>Search Papers</h3>
+                    <p>Find relevant research papers on any topic from our database.</p>
+                </div>
+                <div class="l-card">
+                    <div class="l-card-icon">🛡️</div>
+                    <h3>Plagiarism Checker</h3>
+                    <p>Check your text against online sources for originality.</p>
+                </div>
+                <div class="l-card">
+                    <div class="l-card-icon">📝</div>
+                    <h3>Summarizer</h3>
+                    <p>Get concise summaries of long research papers instantly.</p>
+                </div>
+            </div>
+            <button class="btn-start" id="start-btn">Get Started →</button>
+            <p class="landing-footer">A Project by Our Team</p>
+        </div>
+    </div>
+
+    <nav class="navbar app-hidden" id="main-nav">
+        <div class="nav-inner">
+            <div class="logo">📚 Research<span>Hub</span></div>
+            <ul class="nav-links" id="nav-links">
+                <li class="active" data-target="search-view">🔍 Search Papers</li>
+                <li data-target="plagiarism-view">🛡️ Plagiarism Checker</li>
+                <li data-target="summary-view">📝 Summarizer</li>
+                <li data-target="history-view">📂 My Library</li>
+            </ul>
+        </div>
+    </nav>
+
+    <main class="container app-hidden" id="main-container">
+        <section id="search-view" class="view active-view">
+            <div class="page-header">
+                <h1>Search Research Papers</h1>
+                <p>Enter a topic or keyword to find relevant research papers from our database.</p>
+            </div>
+            <div class="search-bar">
+                <input type="text" id="search-input" placeholder="Type a topic... e.g. artificial intelligence, climate change, finance">
+                <button class="btn" id="search-btn">Search</button>
+            </div>
+            <div id="recent-searches" class="recent-searches"></div>
+            <div class="tags-row">
+                <span class="tag" data-query="artificial intelligence">Artificial Intelligence</span>
+                <span class="tag" data-query="data science">Data Science</span>
+                <span class="tag" data-query="climate change">Climate Change</span>
+                <span class="tag" data-query="finance">Finance</span>
+                <span class="tag" data-query="deep learning">Deep Learning</span>
+                <span class="tag" data-query="blockchain">Blockchain</span>
+                <span class="tag" data-query="healthcare">Healthcare</span>
+                <span class="tag" data-query="cybersecurity">Cybersecurity</span>
+            </div>
+
+            <div id="search-diagnostics" class="diagnostics-panel" style="display:none;"></div>
+
+            <div class="loader" id="search-loader"><div class="spinner"></div><p>Searching...</p></div>
+            <div id="search-results" class="results-grid"></div>
+            <div id="no-results" class="empty-msg">
+                <p>🔍 Search for a topic above to see results.</p>
+            </div>
+        </section>
+
+        <section id="plagiarism-view" class="view">
+            <div class="page-header">
+                <h1>Plagiarism Checker</h1>
+                <p>Paste your text below or upload a PDF to check it for plagiarism and AI writing patterns.</p>
+            </div>
+            <div class="card">
+                <div class="card-top">
+                    <label>Your Text</label>
+                    <span class="char-count" id="plag-char-count">0 characters</span>
+                </div>
+                <div class="upload-row">
+                    <input type="file" id="plag-pdf-input" accept="application/pdf">
+                    <div class="drop-zone" id="plag-drop-zone">Drop PDF here or click file picker above</div>
+                    <span class="file-hint" id="plag-pdf-status">Upload a PDF to auto-fill text.</span>
+                </div>
+                <div id="plag-validation-feedback" class="validation-feedback" style="display:none;"></div>
+                <textarea id="plagiarism-input" rows="10" placeholder="Paste your research paper, essay, or any text here..."></textarea>
+                <button class="btn full-width" id="check-plag-btn">Check Plagiarism</button>
+            </div>
+            <div class="loader" id="plag-loader"><div class="spinner"></div><p>Checking...</p></div>
+            <div id="plag-result" class="result-box"></div>
+            <div class="action-row">
+                <button class="btn-secondary" id="export-plag-report" disabled>Export Plagiarism Report</button>
+            </div>
+        </section>
+
+        <section id="summary-view" class="view">
+            <div class="page-header">
+                <h1>Paper Summarizer</h1>
+                <p>Paste research content or upload a PDF to generate a meaningful summary with key points.</p>
+            </div>
+            <div class="two-col">
+                <div class="card">
+                    <h3>📄 Input Text</h3>
+                    <div class="upload-row">
+                        <input type="file" id="summary-pdf-input" accept="application/pdf">
+                        <div class="drop-zone" id="summary-drop-zone">Drop PDF here or click file picker above</div>
+                        <span class="file-hint" id="summary-pdf-status">Upload a PDF to auto-fill text.</span>
+                    </div>
+                    <div id="summary-validation-feedback" class="validation-feedback" style="display:none;"></div>
+                    <textarea id="summary-input" rows="10" placeholder="Paste the abstract or text of a research paper here..."></textarea>
+                    <button class="btn full-width" id="summarize-btn">Generate Summary</button>
+                </div>
+                <div class="card">
+                    <h3>📝 Summary Output</h3>
+                    <div class="loader" id="summary-loader"><div class="spinner"></div><p>Generating...</p></div>
+                    <div id="summary-content" class="summary-output">
+                        <p class="muted">Click Generate Summary to see results here.</p>
+                    </div>
+                    <div class="action-row">
+                        <button class="btn-secondary" id="export-summary-report" disabled>Export Summary</button>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <section id="history-view" class="view">
+            <div class="page-header">
+                <h1>My Library</h1>
+                <p>Your saved papers and past activity.</p>
+            </div>
+            <div class="tab-row">
+                <button class="tab active" data-lib="saved">⭐ Saved Papers</button>
+                <button class="tab" data-lib="searches">🔍 Searches</button>
+                <button class="tab" data-lib="reports">🛡️ Reports</button>
+                <button class="tab" data-lib="summaries">📝 Summaries</button>
+            </div>
+            <div id="library-content" class="library-content">
+                <div class="empty-msg"><p>📚 Your library is empty. Start using the tools to build your collection.</p></div>
+            </div>
+            <button class="btn-outline-danger" id="clear-library-btn">Clear All Data</button>
+        </section>
+    </main>
+
+    <div id="toast" class="toast"></div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+    <script src="db.js"></script>
+    <script src="app.js"></script>
+</body>
+</html>
