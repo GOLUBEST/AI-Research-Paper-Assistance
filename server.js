@@ -10,11 +10,15 @@ app.use(cors());
 app.use(express.json({ limit: '2mb' }));
 app.use(express.static(path.join(__dirname)));
 
+// Cache/search tuning
 const CACHE_TTL_MS = 10 * 60 * 1000;
 const SEARCH_LIMIT = 12;
+
+// In-memory cache: key -> { data, expiresAt }
 const cache = new Map();
 const xmlParser = new XMLParser({ ignoreAttributes: false });
 
+// Lightweight per-source health stats for /api/health diagnostics.
 const sourceHealth = {
     semanticscholar: { ok: 0, fail: 0, lastStatus: 'unknown', lastLatencyMs: null, lastCheckedAt: null, lastError: null },
     arxiv: { ok: 0, fail: 0, lastStatus: 'unknown', lastLatencyMs: null, lastCheckedAt: null, lastError: null },
@@ -86,6 +90,9 @@ function updateHealth(source, status, latencyMs, error = null) {
     row.lastError = error;
 }
 
+/**
+ * Fetches JSON with a timeout (AbortController).
+ */
 async function fetchJsonWithTimeout(url, timeoutMs = 12000) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -98,6 +105,9 @@ async function fetchJsonWithTimeout(url, timeoutMs = 12000) {
     }
 }
 
+/**
+ * Fetches text with a timeout (AbortController).
+ */
 async function fetchTextWithTimeout(url, timeoutMs = 12000) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -110,8 +120,12 @@ async function fetchTextWithTimeout(url, timeoutMs = 12000) {
     }
 }
 
-async function sourceSemanticScholar(query) {
-    const source = 'semanticscholar';
+/**
+ * Shared helper for search sources.
+ * - Provides consistent cache keying, latency measurement, health updates, and error shape.
+ * - The `fetcher` must return raw data; the `mapper` must return an array of paper objects.
+ */
+async function cachedSourceSearch({ source, query, fetcher, mapper }) {
     const cacheKey = `search:${source}:${query.toLowerCase()}`;
     const cached = getCache(cacheKey);
     if (cached) {
@@ -121,16 +135,8 @@ async function sourceSemanticScholar(query) {
 
     const t0 = Date.now();
     try {
-        const url = `https://api.semanticscholar.org/graph/v1/paper/search?query=${encodeURIComponent(query)}&limit=${SEARCH_LIMIT}&fields=title,authors,year,abstract,venue,url`;
-        const data = await fetchJsonWithTimeout(url);
-        const papers = (data.data || []).map(p => ({
-            title: p.title,
-            authors: p.authors ? p.authors.map(a => a.name).join(', ') : 'Unknown Authors',
-            year: p.year,
-            abstract: p.abstract || 'No abstract available',
-            source: p.venue || 'Semantic Scholar',
-            url: p.url || ''
-        }));
+        const raw = await fetcher();
+        const papers = mapper(raw);
         const latencyMs = Date.now() - t0;
         setCache(cacheKey, papers);
         updateHealth(source, 'ok', latencyMs);
@@ -142,44 +148,53 @@ async function sourceSemanticScholar(query) {
     }
 }
 
+async function sourceSemanticScholar(query) {
+    const source = 'semanticscholar';
+    return cachedSourceSearch({
+        source,
+        query,
+        fetcher: async () => {
+            const url = `https://api.semanticscholar.org/graph/v1/paper/search?query=${encodeURIComponent(query)}&limit=${SEARCH_LIMIT}&fields=title,authors,year,abstract,venue,url`;
+            return await fetchJsonWithTimeout(url);
+        },
+        mapper: (data) => (data.data || []).map(p => ({
+            title: p.title,
+            authors: p.authors ? p.authors.map(a => a.name).join(', ') : 'Unknown Authors',
+            year: p.year,
+            abstract: p.abstract || 'No abstract available',
+            source: p.venue || 'Semantic Scholar',
+            url: p.url || ''
+        }))
+    });
+}
+
 async function sourceArxiv(query) {
     const source = 'arxiv';
-    const cacheKey = `search:${source}:${query.toLowerCase()}`;
-    const cached = getCache(cacheKey);
-    if (cached) {
-        updateHealth(source, 'cache', 0);
-        return { source, status: 'cache', latencyMs: 0, fromCache: true, count: cached.length, papers: cached };
-    }
-
-    const t0 = Date.now();
-    try {
-        const url = `https://export.arxiv.org/api/query?search_query=all:${encodeURIComponent(query)}&max_results=${SEARCH_LIMIT}`;
-        const xml = await fetchTextWithTimeout(url);
-        const parsed = xmlParser.parse(xml);
-        const feed = parsed.feed || {};
-        const entries = Array.isArray(feed.entry) ? feed.entry : (feed.entry ? [feed.entry] : []);
-        const papers = entries.map(entry => {
-            const authorsArr = Array.isArray(entry.author) ? entry.author : (entry.author ? [entry.author] : []);
-            const authors = authorsArr.map(a => a.name).filter(Boolean).join(', ');
-            return {
-                title: normalizeText(entry.title || 'Untitled'),
-                authors: authors || 'Unknown Authors',
-                year: entry.published ? new Date(entry.published).getFullYear() : 'N/A',
-                abstract: normalizeText(entry.summary || 'No abstract available'),
-                source: 'arXiv',
-                url: entry.id || ''
-            };
-        });
-
-        const latencyMs = Date.now() - t0;
-        setCache(cacheKey, papers);
-        updateHealth(source, 'ok', latencyMs);
-        return { source, status: 'ok', latencyMs, fromCache: false, count: papers.length, papers };
-    } catch (error) {
-        const latencyMs = Date.now() - t0;
-        updateHealth(source, 'error', latencyMs, error.message);
-        return { source, status: 'error', latencyMs, fromCache: false, count: 0, papers: [], error: error.message };
-    }
+    return cachedSourceSearch({
+        source,
+        query,
+        fetcher: async () => {
+            const url = `https://export.arxiv.org/api/query?search_query=all:${encodeURIComponent(query)}&max_results=${SEARCH_LIMIT}`;
+            return await fetchTextWithTimeout(url);
+        },
+        mapper: (xml) => {
+            const parsed = xmlParser.parse(xml);
+            const feed = parsed.feed || {};
+            const entries = Array.isArray(feed.entry) ? feed.entry : (feed.entry ? [feed.entry] : []);
+            return entries.map(entry => {
+                const authorsArr = Array.isArray(entry.author) ? entry.author : (entry.author ? [entry.author] : []);
+                const authors = authorsArr.map(a => a.name).filter(Boolean).join(', ');
+                return {
+                    title: normalizeText(entry.title || 'Untitled'),
+                    authors: authors || 'Unknown Authors',
+                    year: entry.published ? new Date(entry.published).getFullYear() : 'N/A',
+                    abstract: normalizeText(entry.summary || 'No abstract available'),
+                    source: 'arXiv',
+                    url: entry.id || ''
+                };
+            });
+        }
+    });
 }
 
 function rebuildOpenAlexAbstract(indexObj) {
@@ -193,50 +208,34 @@ function rebuildOpenAlexAbstract(indexObj) {
 
 async function sourceOpenAlex(query) {
     const source = 'openalex';
-    const cacheKey = `search:${source}:${query.toLowerCase()}`;
-    const cached = getCache(cacheKey);
-    if (cached) {
-        updateHealth(source, 'cache', 0);
-        return { source, status: 'cache', latencyMs: 0, fromCache: true, count: cached.length, papers: cached };
-    }
-
-    const t0 = Date.now();
-    try {
-        const url = `https://api.openalex.org/works?search=${encodeURIComponent(query)}&per-page=${SEARCH_LIMIT}&sort=relevance_score:desc`;
-        const data = await fetchJsonWithTimeout(url);
-        const papers = (data.results || []).map(item => ({
+    return cachedSourceSearch({
+        source,
+        query,
+        fetcher: async () => {
+            const url = `https://api.openalex.org/works?search=${encodeURIComponent(query)}&per-page=${SEARCH_LIMIT}&sort=relevance_score:desc`;
+            return await fetchJsonWithTimeout(url);
+        },
+        mapper: (data) => (data.results || []).map(item => ({
             title: item.title || 'Untitled',
             authors: (item.authorships || []).map(a => a.author && a.author.display_name).filter(Boolean).slice(0, 8).join(', ') || 'Unknown Authors',
             year: item.publication_year || 'N/A',
             abstract: rebuildOpenAlexAbstract(item.abstract_inverted_index),
             source: (item.primary_location && item.primary_location.source && item.primary_location.source.display_name) || 'OpenAlex',
             url: item.id || ''
-        }));
-        const latencyMs = Date.now() - t0;
-        setCache(cacheKey, papers);
-        updateHealth(source, 'ok', latencyMs);
-        return { source, status: 'ok', latencyMs, fromCache: false, count: papers.length, papers };
-    } catch (error) {
-        const latencyMs = Date.now() - t0;
-        updateHealth(source, 'error', latencyMs, error.message);
-        return { source, status: 'error', latencyMs, fromCache: false, count: 0, papers: [], error: error.message };
-    }
+        }))
+    });
 }
 
 async function sourceCrossref(query) {
     const source = 'crossref';
-    const cacheKey = `search:${source}:${query.toLowerCase()}`;
-    const cached = getCache(cacheKey);
-    if (cached) {
-        updateHealth(source, 'cache', 0);
-        return { source, status: 'cache', latencyMs: 0, fromCache: true, count: cached.length, papers: cached };
-    }
-
-    const t0 = Date.now();
-    try {
-        const url = `https://api.crossref.org/works?rows=${SEARCH_LIMIT}&query=${encodeURIComponent(query)}`;
-        const data = await fetchJsonWithTimeout(url);
-        const papers = ((data.message && data.message.items) || []).map(item => {
+    return cachedSourceSearch({
+        source,
+        query,
+        fetcher: async () => {
+            const url = `https://api.crossref.org/works?rows=${SEARCH_LIMIT}&query=${encodeURIComponent(query)}`;
+            return await fetchJsonWithTimeout(url);
+        },
+        mapper: (data) => ((data.message && data.message.items) || []).map(item => {
             const title = Array.isArray(item.title) ? item.title[0] : item.title;
             const authors = (item.author || []).map(a => [a.given, a.family].filter(Boolean).join(' ')).filter(Boolean).join(', ');
             const abstractRaw = item.abstract || '';
@@ -252,17 +251,8 @@ async function sourceCrossref(query) {
                 source: 'Crossref',
                 url: item.URL || ''
             };
-        });
-
-        const latencyMs = Date.now() - t0;
-        setCache(cacheKey, papers);
-        updateHealth(source, 'ok', latencyMs);
-        return { source, status: 'ok', latencyMs, fromCache: false, count: papers.length, papers };
-    } catch (error) {
-        const latencyMs = Date.now() - t0;
-        updateHealth(source, 'error', latencyMs, error.message);
-        return { source, status: 'error', latencyMs, fromCache: false, count: 0, papers: [], error: error.message };
-    }
+        })
+    });
 }
 
 function cosineSimilarity(textA, textB) {
@@ -354,32 +344,44 @@ async function buildPlagiarismIndex(topic) {
     return { ...plagiarismIndex, fromCache: false };
 }
 
-app.get('/api/search', async (req, res) => {
-    const q = normalizeText(req.query.q || '');
-    if (!q) return res.status(400).json({ error: 'Missing q parameter' });
+function validateSearchQuery(q) {
+    const query = normalizeText(q || '');
+    if (!query) return { ok: false, error: 'Missing q parameter' };
+    return { ok: true, query };
+}
 
-    const [ss, ax, oa, cr] = await Promise.all([
+function buildSearchDiagnostics(results) {
+    return {
+        generatedAt: new Date().toISOString(),
+        sources: results.map(s => ({
+            source: s.source,
+            status: s.status,
+            latencyMs: s.latencyMs,
+            fromCache: s.fromCache,
+            count: s.count,
+            error: s.error || null
+        }))
+    };
+}
+
+app.get('/api/search', async (req, res) => {
+    const validation = validateSearchQuery(req.query.q);
+    if (!validation.ok) return res.status(400).json({ error: validation.error });
+    const q = validation.query;
+
+    const results = await Promise.all([
         sourceSemanticScholar(q),
         sourceArxiv(q),
         sourceOpenAlex(q),
         sourceCrossref(q)
     ]);
 
-    const papers = dedupePapers([...ss.papers, ...ax.papers, ...oa.papers, ...cr.papers]).slice(0, 40);
+    const papers = dedupePapers(results.flatMap(r => r.papers)).slice(0, 40);
+
     return res.json({
         query: q,
         papers,
-        diagnostics: {
-            generatedAt: new Date().toISOString(),
-            sources: [ss, ax, oa, cr].map(s => ({
-                source: s.source,
-                status: s.status,
-                latencyMs: s.latencyMs,
-                fromCache: s.fromCache,
-                count: s.count,
-                error: s.error || null
-            }))
-        }
+        diagnostics: buildSearchDiagnostics(results)
     });
 });
 
